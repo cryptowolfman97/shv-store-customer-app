@@ -8,6 +8,8 @@ from datetime import datetime
 import ssl
 import sys
 
+
+
 # --- ANDROID SSL VERIFICATION FIX ---
 try:
     ssl._create_default_https_context = ssl._create_unverified_context
@@ -36,6 +38,15 @@ from kivy.graphics import Color, RoundedRectangle, Rectangle, Line, InstructionG
 from kivy.utils import get_color_from_hex
 from kivy.properties import StringProperty
 from kivy.storage.jsonstore import JsonStore
+
+
+IS_ANDROID = False
+try:
+    from jnius import autoclass
+    IS_ANDROID = True
+except ImportError:
+    pass
+
 
 def _get_app_dir():
     """Return the app's private data directory on Android, or cwd on desktop."""
@@ -1169,7 +1180,7 @@ class StoreAppDetailScreen(Screen):
         self.add_widget(root)
 
     # ------------------------------------------------------------
-    # FIXED: Threaded download & install
+    # Threaded download & install with proper Android detection
     # ------------------------------------------------------------
     def download_and_install(self, apk_url, app_id):
         """Start background thread to download and install."""
@@ -1181,15 +1192,22 @@ class StoreAppDetailScreen(Screen):
                 print(f"Error updating download count: {e}")
         threading.Thread(target=inc, daemon=True).start()
 
-        if "android" not in sys.platform:
+        # Detect Android by trying to import jnius
+        is_android = False
+        try:
+            from jnius import autoclass
+            is_android = True
+        except ImportError:
+            pass
+
+        if not is_android:
             threading.Thread(target=self._desktop_download, args=(apk_url, app_id), daemon=True).start()
             return
 
-        # Android: check permission
+        # Android: check install permission
         if not self._check_install_permission():
             self.status.show("Requesting install permission...", success=True, duration=2)
             self._request_install_permission()
-            # retry after a few seconds
             Clock.schedule_once(lambda dt: self.download_and_install(apk_url, app_id), 3)
             return
 
@@ -1228,14 +1246,14 @@ class StoreAppDetailScreen(Screen):
             Clock.schedule_once(lambda dt: self.status.show("Downloading APK...", success=True))
             urllib.request.urlretrieve(apk_url, apk_path, reporthook=report_hook)
             Clock.schedule_once(lambda dt: self.status.show("Download complete. Installing...", success=True))
-            self._install_apk(apk_path)
+            Clock.schedule_once(lambda dt: self._install_apk(apk_path))
         except Exception as e:
             Clock.schedule_once(lambda dt: self.status.show(f"Download error: {str(e)[:50]}", duration=4))
             if os.path.exists(apk_path):
                 os.remove(apk_path)
 
     def _install_apk(self, apk_path):
-        """Launch system installer (runs on main thread, called from thread via Clock)."""
+        """Launch system installer (must be called on main thread)."""
         from jnius import autoclass
         PythonActivity = autoclass('org.kivy.android.PythonActivity')
         Intent = autoclass('android.content.Intent')
@@ -1247,7 +1265,6 @@ class StoreAppDetailScreen(Screen):
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
         if Build.VERSION.SDK_INT >= 24:
-            # Use androidx.core.content.FileProvider (support library)
             FileProvider = autoclass('androidx.core.content.FileProvider')
             authority = f"{PythonActivity.mActivity.getPackageName()}.fileprovider"
             apk_uri = FileProvider.getUriForFile(
@@ -1289,7 +1306,6 @@ class StoreAppDetailScreen(Screen):
         intent.setData(Uri.parse(f"package:{PythonActivity.mActivity.getPackageName()}"))
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         PythonActivity.mActivity.startActivity(intent)
-
 
 
 class StoreUpdateCard(SHVCard):
