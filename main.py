@@ -90,7 +90,7 @@ C_DIVIDER   = get_color_from_hex("#1F1F1F")
 C_NAV       = get_color_from_hex("#0A0A0A")
 
 # ─────────────────────────────────────────────
-#  SUPABASE CLIENT (Unified Version)
+#  SUPABASECLIENT (Unified Version)
 # ─────────────────────────────────────────────
 class SupabaseClient:
     def __init__(self, url, key):
