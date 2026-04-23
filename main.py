@@ -6,6 +6,7 @@ Version: 2.0.0
 import os, json, threading, urllib.request, urllib.parse, urllib.error, io, base64
 from datetime import datetime
 import ssl
+import sys
 
 # --- ANDROID SSL VERIFICATION FIX ---
 try:
@@ -69,7 +70,7 @@ def _open_url_in_browser(url):
 SUPABASE_URL = "https://ovdxetyadfsxehwnbyuz.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_3J-H60daCgWdhSvpdXi0zw_QpPax3Dz"
 APP_VERSION = "2.0.0"
-FONT_PATH = "emoji.ttf"
+FONT_PATH = "/storage/emulated/0/Download/emoji.ttf"
 
 # ─────────────────────────────────────────────
 #  THEME
@@ -1078,6 +1079,19 @@ class StoreCatalogScreen(StoreScreenWithNav):
     def _open_detail(self, item):
         App.get_running_app().current_app_detail = item; self.manager.current = "store_app_detail"
 
+import sys
+import threading
+import os
+import urllib.request
+from kivy.clock import Clock
+from kivy.uix.screenmanager import Screen
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.image import AsyncImage
+from kivy.metrics import dp, sp
+from kivy.uix.widget import Widget
 
 class StoreAppDetailScreen(Screen):
     def on_enter(self):
@@ -1099,11 +1113,9 @@ class StoreAppDetailScreen(Screen):
         scroll = ScrollView()
         layout = BoxLayout(orientation="vertical", padding=[dp(16), dp(16)], spacing=dp(14), size_hint_y=None)
         layout.bind(minimum_height=layout.setter("height"))
-        
-        # 1. Header
+
         icon_row = BoxLayout(size_hint_y=None, height=dp(72), spacing=dp(16))
         icon_row.add_widget(load_remote_image(item.get("icon_url") or "", fallback_text="📦", size_hint_x=None, width=dp(56), height=dp(56)))
-        
         info_col = BoxLayout(orientation="vertical", spacing=dp(4))
         info_col.add_widget(SHVLabel(text=item.get("name",""), font_size=sp(18), bold=True, size_hint_y=None, height=dp(28)))
         info_col.add_widget(SHVLabel(text=item.get("tagline",""), font_size=sp(12), color=C_TEXT_SEC, size_hint_y=None, height=dp(20)))
@@ -1111,7 +1123,6 @@ class StoreAppDetailScreen(Screen):
         icon_row.add_widget(info_col)
         layout.add_widget(icon_row)
         
-        # 2. Stats
         stats = BoxLayout(size_hint_y=None, height=dp(64), spacing=dp(8))
         for label, val in [("Category", item.get("category","—")), ("Downloads", str(item.get("download_count", 0))), ("License", "Required" if item.get("requires_license") else "Free")]:
             card = SHVCard(color=C_CARD2, size_hint_x=1)
@@ -1120,7 +1131,6 @@ class StoreAppDetailScreen(Screen):
             stats.add_widget(card)
         layout.add_widget(stats)
         
-        # 3. Media Carousel (FIXED LAG & IMAGES)
         raw_shots = item.get("screenshots", [])
         if isinstance(raw_shots, list):
             img_urls = [str(u).strip() for u in raw_shots if str(u).strip()]
@@ -1133,44 +1143,152 @@ class StoreAppDetailScreen(Screen):
             sc_scroll = ScrollView(size_hint_y=None, height=dp(220), do_scroll_x=True, do_scroll_y=False)
             sc_box = BoxLayout(orientation="horizontal", size_hint_x=None, spacing=dp(12))
             sc_box.bind(minimum_width=sc_box.setter('width'))
-            
-            from kivy.uix.image import AsyncImage
             for u in img_urls:
-                # Native AsyncImage completely ignores bad characters and loads lag-free!
                 img = AsyncImage(source=u, size_hint_x=None, width=dp(115), height=dp(220), allow_stretch=True, keep_ratio=True)
                 sc_box.add_widget(img)
-                
             sc_scroll.add_widget(sc_box)
             layout.add_widget(sc_scroll)
             layout.add_widget(Widget(size_hint_y=None, height=dp(4)))
         
-        # 4. About Text
         layout.add_widget(SHVLabel(text="About", font_size=sp(14), bold=True, color=C_TEAL, size_hint_y=None, height=dp(24)))
         desc_lbl = Label(text=item.get("description", "No description."), font_size=sp(13), color=C_TEXT_SEC, size_hint_y=None, halign="left", valign="top", text_size=(Window.width - dp(32), None))
         desc_lbl.bind(texture_size=lambda w, s: setattr(w, "height", s[1]))
         layout.add_widget(desc_lbl)
-        
         layout.add_widget(Widget(size_hint_y=None, height=dp(8)))
         
         self.status = StatusBar(size_hint_x=1)
         layout.add_widget(self.status)
         
-        # 5. Install Button
         if item.get("apk_url", ""):
             install_btn = SHVButton(text="⬇  Download & Install", primary=True, height=dp(52))
-            install_btn.bind(on_release=lambda _, u=item.get("apk_url",""), i=item.get("id",""): self._open_install(u, i))
+            install_btn.bind(on_release=lambda _, u=item.get("apk_url",""), i=item.get("id",""): self.download_and_install(u, i))
             layout.add_widget(install_btn)
-            
+        
         scroll.add_widget(layout)
         root.add_widget(scroll)
         self.add_widget(root)
 
-    def _open_install(self, apk_url, app_id):
+    # ------------------------------------------------------------
+    # FIXED: Threaded download & install
+    # ------------------------------------------------------------
+    def download_and_install(self, apk_url, app_id):
+        """Start background thread to download and install."""
+        # Increment download count in background
+        def inc():
+            try:
+                supabase.increment_download(app_id)
+            except Exception as e:
+                print(f"Error updating download count: {e}")
+        threading.Thread(target=inc, daemon=True).start()
+
+        if "android" not in sys.platform:
+            threading.Thread(target=self._desktop_download, args=(apk_url, app_id), daemon=True).start()
+            return
+
+        # Android: check permission
+        if not self._check_install_permission():
+            self.status.show("Requesting install permission...", success=True, duration=2)
+            self._request_install_permission()
+            # retry after a few seconds
+            Clock.schedule_once(lambda dt: self.download_and_install(apk_url, app_id), 3)
+            return
+
+        threading.Thread(target=self._download_and_install_android, args=(apk_url, app_id), daemon=True).start()
+
+    def _desktop_download(self, apk_url, app_id):
+        """Mock download on PC (runs in thread)."""
+        dest = os.path.join(os.getcwd(), f"test_app_{app_id}.apk")
         try:
-            if app_id: supabase.increment_download(app_id)
-        except Exception: pass
-        _open_url_in_browser(apk_url)
-        self.status.show("Opening browser to download...", success=True, duration=4)
+            Clock.schedule_once(lambda dt: self.status.show("Downloading (desktop mock)...", success=True))
+            urllib.request.urlretrieve(apk_url, dest)
+            Clock.schedule_once(lambda dt: self.status.show(f"Downloaded to {dest}", success=True, duration=5))
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self.status.show(f"Download failed: {e}", duration=4))
+
+    def _download_and_install_android(self, apk_url, app_id):
+        """Download APK to cache dir and install (runs in thread)."""
+        from jnius import autoclass
+
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        cache_dir = PythonActivity.mActivity.getCacheDir().getAbsolutePath()
+        apk_filename = f"shv_app_{app_id}.apk"
+        apk_path = os.path.join(cache_dir, apk_filename)
+
+        last_percent = 0
+        def report_hook(count, block_size, total_size):
+            nonlocal last_percent
+            if total_size <= 0:
+                return
+            percent = int(count * block_size * 100 / total_size)
+            if percent - last_percent >= 10 or percent == 100:
+                last_percent = percent
+                Clock.schedule_once(lambda dt: self.status.show(f"Downloading {percent}%...", success=True))
+
+        try:
+            Clock.schedule_once(lambda dt: self.status.show("Downloading APK...", success=True))
+            urllib.request.urlretrieve(apk_url, apk_path, reporthook=report_hook)
+            Clock.schedule_once(lambda dt: self.status.show("Download complete. Installing...", success=True))
+            self._install_apk(apk_path)
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self.status.show(f"Download error: {str(e)[:50]}", duration=4))
+            if os.path.exists(apk_path):
+                os.remove(apk_path)
+
+    def _install_apk(self, apk_path):
+        """Launch system installer (runs on main thread, called from thread via Clock)."""
+        from jnius import autoclass
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        Intent = autoclass('android.content.Intent')
+        File = autoclass('java.io.File')
+        Uri = autoclass('android.net.Uri')
+        Build = autoclass('android.os.Build')
+
+        intent = Intent(Intent.ACTION_VIEW)
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        if Build.VERSION.SDK_INT >= 24:
+            # Use androidx.core.content.FileProvider (support library)
+            FileProvider = autoclass('androidx.core.content.FileProvider')
+            authority = f"{PythonActivity.mActivity.getPackageName()}.fileprovider"
+            apk_uri = FileProvider.getUriForFile(
+                PythonActivity.mActivity,
+                authority,
+                File(apk_path)
+            )
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        else:
+            apk_uri = Uri.fromFile(File(apk_path))
+
+        intent.setDataAndType(apk_uri, "application/vnd.android.package-archive")
+        PythonActivity.mActivity.startActivity(intent)
+
+        # Delete APK after installer starts
+        Clock.schedule_once(lambda dt: self._delete_apk_after_install(apk_path), 5)
+
+    def _delete_apk_after_install(self, apk_path):
+        try:
+            if os.path.exists(apk_path):
+                os.remove(apk_path)
+        except Exception:
+            pass
+
+    def _check_install_permission(self):
+        from jnius import autoclass
+        PackageManager = autoclass('android.content.pm.PackageManager')
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        perm = "android.permission.REQUEST_INSTALL_PACKAGES"
+        return PythonActivity.mActivity.checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+
+    def _request_install_permission(self):
+        from jnius import autoclass
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        Intent = autoclass('android.content.Intent')
+        Settings = autoclass('android.provider.Settings')
+        Uri = autoclass('android.net.Uri')
+        intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+        intent.setData(Uri.parse(f"package:{PythonActivity.mActivity.getPackageName()}"))
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        PythonActivity.mActivity.startActivity(intent)
 
 
 
