@@ -21,7 +21,8 @@ android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
 android.enable_androidx = True
 android.allow_backup = True
-
+android.gradle_dependencies = androidx.core:core:1.9.0
+android.add_src = android-res
 [buildozer]
 
 log_level = 2
