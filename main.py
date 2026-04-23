@@ -81,7 +81,7 @@ def _open_url_in_browser(url):
 SUPABASE_URL = "https://ovdxetyadfsxehwnbyuz.supabase.co"
 SUPABASE_ANON_KEY = "sb_publishable_3J-H60daCgWdhSvpdXi0zw_QpPax3Dz"
 APP_VERSION = "2.0.0"
-FONT_PATH = "emoji.ttf"
+FONT_PATH = "/storage/emulated/0/Download/emoji.ttf"
 
 # ─────────────────────────────────────────────
 #  THEME
@@ -1184,7 +1184,6 @@ class StoreAppDetailScreen(Screen):
     # ------------------------------------------------------------
     def download_and_install(self, apk_url, app_id):
         """Start background thread to download and install."""
-        # Increment download count in background
         def inc():
             try:
                 supabase.increment_download(app_id)
@@ -1192,7 +1191,6 @@ class StoreAppDetailScreen(Screen):
                 print(f"Error updating download count: {e}")
         threading.Thread(target=inc, daemon=True).start()
 
-        # Detect Android by trying to import jnius
         is_android = False
         try:
             from jnius import autoclass
@@ -1204,7 +1202,6 @@ class StoreAppDetailScreen(Screen):
             threading.Thread(target=self._desktop_download, args=(apk_url, app_id), daemon=True).start()
             return
 
-        # Android: check install permission
         if not self._check_install_permission():
             self.status.show("Requesting install permission...", success=True, duration=2)
             self._request_install_permission()
@@ -1226,7 +1223,6 @@ class StoreAppDetailScreen(Screen):
     def _download_and_install_android(self, apk_url, app_id):
         """Download APK to cache dir and install (runs in thread)."""
         from jnius import autoclass
-
         PythonActivity = autoclass('org.kivy.android.PythonActivity')
         cache_dir = PythonActivity.mActivity.getCacheDir().getAbsolutePath()
         apk_filename = f"shv_app_{app_id}.apk"
@@ -1279,7 +1275,6 @@ class StoreAppDetailScreen(Screen):
         intent.setDataAndType(apk_uri, "application/vnd.android.package-archive")
         PythonActivity.mActivity.startActivity(intent)
 
-        # Delete APK after installer starts
         Clock.schedule_once(lambda dt: self._delete_apk_after_install(apk_path), 5)
 
     def _delete_apk_after_install(self, apk_path):
@@ -1290,11 +1285,13 @@ class StoreAppDetailScreen(Screen):
             pass
 
     def _check_install_permission(self):
+        """Return True if app is allowed to install unknown apps (Android 8+)."""
         from jnius import autoclass
-        PackageManager = autoclass('android.content.pm.PackageManager')
+        Build = autoclass('android.os.Build')
         PythonActivity = autoclass('org.kivy.android.PythonActivity')
-        perm = "android.permission.REQUEST_INSTALL_PACKAGES"
-        return PythonActivity.mActivity.checkSelfPermission(perm) == PackageManager.PERMISSION_GRANTED
+        if Build.VERSION.SDK_INT >= 26:
+            return PythonActivity.mActivity.getPackageManager().canRequestPackageInstalls()
+        return True
 
     def _request_install_permission(self):
         from jnius import autoclass
@@ -1306,7 +1303,6 @@ class StoreAppDetailScreen(Screen):
         intent.setData(Uri.parse(f"package:{PythonActivity.mActivity.getPackageName()}"))
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         PythonActivity.mActivity.startActivity(intent)
-
 
 class StoreUpdateCard(SHVCard):
     def __init__(self, item, **kwargs):
